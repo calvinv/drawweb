@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draw Party</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; font-family: "Comic Sans MS", "Chalkboard SE", system-ui, sans-serif; user-select: none; }
+  canvas { position: fixed; inset: 0; touch-action: none; }
+  #fx { pointer-events: none; }
+  #bar {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center;
+    background: rgba(255,255,255,.9); padding: 8px 12px; border-radius: 999px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.15); z-index: 10; max-width: calc(100vw - 32px);
+  }
+  .sw { width: 34px; height: 34px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 0 0 2px #ccc; cursor: pointer; padding: 0; }
+  .sw.on { box-shadow: 0 0 0 4px #333; }
+  .rainbow { background: conic-gradient(red, orange, yellow, lime, cyan, blue, magenta, red); }
+  .btn { font: inherit; font-size: 18px; border: none; border-radius: 999px; padding: 6px 12px; cursor: pointer; background: #eee; }
+  .btn:hover { background: #ddd; }
+  .size.on, .tool.on { background: #333; color: #fff; }
+  body.bucket #paint { cursor: cell; }
+  #hint { position: fixed; bottom: 14px; width: 100%; text-align: center; color: #999; font-size: 20px; pointer-events: none; transition: opacity 1s; }
+</style>
+</head>
+<body>
+<canvas id="paint"></canvas>
+<canvas id="fx"></canvas>
+
+<div id="bar">
+  <button class="sw rainbow on" data-color="rainbow" title="Rainbow"></button>
+  <button class="sw" data-color="#ff3b3b" style="background:#ff3b3b"></button>
+  <button class="sw" data-color="#ff9f1c" style="background:#ff9f1c"></button>
+  <button class="sw" data-color="#ffd60a" style="background:#ffd60a"></button>
+  <button class="sw" data-color="#2ec4b6" style="background:#2ec4b6"></button>
+  <button class="sw" data-color="#3a86ff" style="background:#3a86ff"></button>
+  <button class="sw" data-color="#9b5de5" style="background:#9b5de5"></button>
+  <button class="sw" data-color="#222" style="background:#222"></button>
+  <button class="sw" data-color="eraser" style="background:#fff" title="Eraser">🧽</button>
+  <button class="btn size" data-size="6">•</button>
+  <button class="btn size on" data-size="16">●</button>
+  <button class="btn size" data-size="40">⬤</button>
+  <button class="btn tool on" data-tool="brush" title="Brush">🖌️</button>
+  <button class="btn tool" data-tool="bucket" title="Fill">🪣</button>
+  <button class="btn" id="sound" title="Sound">🔊</button>
+  <button class="btn" id="full" title="Full screen">⛶</button>
+  <button class="btn" id="clear" title="Clear">🗑️</button>
+  <a class="btn" href="paint.html" title="Paint pictures" style="text-decoration:none">🎨</a>
+</div>
+<div id="hint">Draw with the mouse • Press any key for shapes!</div>
+
+<script>
+const paint = document.getElementById('paint');
+const fx = document.getElementById('fx');
+const pctx = paint.getContext('2d');
+const fctx = fx.getContext('2d');
+let W, H, dpr;
+
+function resize() {
+  // keep existing drawing when the window resizes
+  const old = document.createElement('canvas');
+  old.width = paint.width; old.height = paint.height;
+  old.getContext('2d').drawImage(paint, 0, 0);
+  dpr = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  for (const c of [paint, fx]) {
+    c.width = W * dpr; c.height = H * dpr;
+    c.style.width = W + 'px'; c.style.height = H + 'px';
+  }
+  pctx.setTransform(1, 0, 0, 1, 0, 0);
+  pctx.fillStyle = '#fff'; pctx.fillRect(0, 0, paint.width, paint.height);
+  pctx.drawImage(old, 0, 0);
+  pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------- toolbar ----------
+let color = 'rainbow', size = 16, hue = 0, soundOn = true;
+document.querySelectorAll('.sw').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.sw').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); color = b.dataset.color; b.blur();
+});
+document.querySelectorAll('.size').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.size').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); size = +b.dataset.size; b.blur();
+});
+let tool = 'brush';
+document.querySelectorAll('.tool').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tool').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); tool = b.dataset.tool; b.blur();
+  document.body.classList.toggle('bucket', tool === 'bucket');
+});
+document.getElementById('sound').onclick = e => {
+  soundOn = !soundOn; e.currentTarget.textContent = soundOn ? '🔊' : '🔇'; e.currentTarget.blur();
+};
+document.getElementById('full').onclick = e => {
+  document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  e.currentTarget.blur();
+};
+document.getElementById('clear').onclick = e => {
+  pctx.fillStyle = '#fff'; pctx.fillRect(0, 0, W, H); e.currentTarget.blur();
+  boop(200, 'sawtooth', 0.3);
+};
+
+// ---------- sound ----------
+let audio;
+function boop(freq, type = 'sine', dur = 0.25) {
+  if (!soundOn) return;
+  audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.type = type; o.frequency.value = freq;
+  o.frequency.exponentialRampToValueAtTime(freq * 1.5, audio.currentTime + dur);
+  g.gain.setValueAtTime(0.2, audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + dur);
+  o.connect(g).connect(audio.destination);
+  o.start(); o.stop(audio.currentTime + dur);
+}
+
+// ---------- mouse drawing ----------
+let drawing = false, last = null;
+function strokeColor() {
+  if (color === 'rainbow') { hue = (hue + 4) % 360; return `hsl(${hue},90%,55%)`; }
+  if (color === 'eraser') return '#fff';
+  return color;
+}
+paint.addEventListener('pointerdown', e => {
+  if (tool === 'bucket') { floodFill(e.clientX, e.clientY, strokeColor()); hideHint(); return; }
+  drawing = true; last = { x: e.clientX, y: e.clientY };
+  paint.setPointerCapture(e.pointerId);
+  dot(last.x, last.y);
+  hideHint();
+});
+paint.addEventListener('pointermove', e => {
+  if (!drawing) return;
+  const p = { x: e.clientX, y: e.clientY };
+  pctx.strokeStyle = strokeColor();
+  pctx.lineWidth = color === 'eraser' ? size * 2.5 : size;
+  pctx.lineCap = pctx.lineJoin = 'round';
+  pctx.beginPath(); pctx.moveTo(last.x, last.y); pctx.lineTo(p.x, p.y); pctx.stroke();
+  last = p;
+});
+addEventListener('pointerup', () => drawing = false);
+function dot(x, y) {
+  pctx.fillStyle = strokeColor();
+  pctx.beginPath(); pctx.arc(x, y, (color === 'eraser' ? size * 2.5 : size) / 2, 0, Math.PI * 2); pctx.fill();
+}
+
+// ---------- paint bucket ----------
+function toRGBA(css) {
+  const c = document.createElement('canvas'); c.width = c.height = 1;
+  const x = c.getContext('2d'); x.fillStyle = css; x.fillRect(0, 0, 1, 1);
+  return x.getImageData(0, 0, 1, 1).data;
+}
+function floodFill(cx, cy, css) {
+  const w = paint.width, h = paint.height;
+  const sx = Math.floor(cx * dpr), sy = Math.floor(cy * dpr);
+  if (sx < 0 || sy < 0 || sx >= w || sy >= h) return;
+  const img = pctx.getImageData(0, 0, w, h), d = img.data;
+  const [fr, fg, fb] = toRGBA(css);
+  const i0 = (sy * w + sx) * 4;
+  const tr = d[i0], tg = d[i0 + 1], tb = d[i0 + 2];
+  if (Math.abs(tr - fr) < 8 && Math.abs(tg - fg) < 8 && Math.abs(tb - fb) < 8) return; // already that colour
+  const TOL = 60; // forgiving, so soft edges get coloured too
+  const match = i => Math.abs(d[i] - tr) <= TOL && Math.abs(d[i + 1] - tg) <= TOL && Math.abs(d[i + 2] - tb) <= TOL;
+  const seen = new Uint8Array(w * h);
+  const filled = [];
+  const stack = [sx, sy];
+  while (stack.length) {
+    const y = stack.pop(); let x = stack.pop();
+    let p = y * w + x;
+    while (x > 0 && !seen[p - 1] && match((p - 1) * 4)) { x--; p--; }
+    let upOpen = false, downOpen = false;
+    for (; x < w && !seen[p] && match(p * 4); x++, p++) {
+      seen[p] = 1; filled.push(p);
+      if (y > 0) {
+        const q = p - w, ok = !seen[q] && match(q * 4);
+        if (ok && !upOpen) stack.push(x, y - 1);
+        upOpen = ok;
+      }
+      if (y < h - 1) {
+        const q = p + w, ok = !seen[q] && match(q * 4);
+        if (ok && !downOpen) stack.push(x, y + 1);
+        downOpen = ok;
+      }
+    }
+  }
+  // paint the area, plus a 1px border so there's no white fringe at the edges
+  const paintPx = p => { const i = p * 4; d[i] = fr; d[i + 1] = fg; d[i + 2] = fb; d[i + 3] = 255; };
+  for (const p of filled) {
+    paintPx(p);
+    const x = p % w;
+    if (x > 0 && !seen[p - 1]) paintPx(p - 1);
+    if (x < w - 1 && !seen[p + 1]) paintPx(p + 1);
+    if (p >= w && !seen[p - w]) paintPx(p - w);
+    if (p < w * (h - 1) && !seen[p + w]) paintPx(p + w);
+  }
+  pctx.putImageData(img, 0, 0);
+  boop(523, 'sine', 0.2); setTimeout(() => boop(784, 'sine', 0.2), 90);
+}
+
+// ---------- shapes on key press ----------
+const SHAPES = ['circle', 'square', 'triangle', 'star', 'heart', 'diamond', 'flower', 'smiley'];
+const anims = [];
+
+function pathShape(ctx, shape, r) {
+  ctx.beginPath();
+  switch (shape) {
+    case 'circle': ctx.arc(0, 0, r, 0, Math.PI * 2); break;
+    case 'square': ctx.roundRect(-r, -r, r * 2, r * 2, r * 0.2); break;
+    case 'triangle': ctx.moveTo(0, -r); ctx.lineTo(r * 0.95, r * 0.75); ctx.lineTo(-r * 0.95, r * 0.75); ctx.closePath(); break;
+    case 'diamond': ctx.moveTo(0, -r); ctx.lineTo(r * 0.75, 0); ctx.lineTo(0, r); ctx.lineTo(-r * 0.75, 0); ctx.closePath(); break;
+    case 'star':
+      for (let i = 0; i < 10; i++) {
+        const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r;
+        ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      }
+      ctx.closePath(); break;
+    case 'heart':
+      ctx.moveTo(0, r * 0.9);
+      ctx.bezierCurveTo(-r * 1.4, -r * 0.1, -r * 0.6, -r * 1.1, 0, -r * 0.4);
+      ctx.bezierCurveTo(r * 0.6, -r * 1.1, r * 1.4, -r * 0.1, 0, r * 0.9);
+      break;
+    case 'flower':
+      for (let i = 0; i < 6; i++) {
+        const a = i * Math.PI / 3;
+        ctx.moveTo(Math.cos(a) * r * 0.55 + r * 0.4, Math.sin(a) * r * 0.55);
+        ctx.arc(Math.cos(a) * r * 0.55, Math.sin(a) * r * 0.55, r * 0.4, 0, Math.PI * 2);
+      }
+      break;
+    case 'smiley': ctx.arc(0, 0, r, 0, Math.PI * 2); break;
+  }
+}
+
+function drawShape(ctx, s, scale) {
+  ctx.save();
+  ctx.translate(s.x, s.y); ctx.rotate(s.rot); ctx.scale(scale, scale);
+  pathShape(ctx, s.shape, s.r);
+  ctx.fillStyle = s.color; ctx.fill();
+  ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.stroke();
+  if (s.shape === 'flower') {
+    ctx.beginPath(); ctx.arc(0, 0, s.r * 0.35, 0, Math.PI * 2); ctx.fillStyle = '#ffd60a'; ctx.fill();
+  }
+  if (s.shape === 'smiley') {
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(-s.r * 0.35, -s.r * 0.25, s.r * 0.12, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(s.r * 0.35, -s.r * 0.25, s.r * 0.12, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, s.r * 0.05, s.r * 0.55, 0.15 * Math.PI, 0.85 * Math.PI);
+    ctx.lineWidth = s.r * 0.1; ctx.strokeStyle = '#222'; ctx.lineCap = 'round'; ctx.stroke();
+  }
+  if (s.label && s.shape !== 'smiley') {
+    ctx.rotate(-s.rot);
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 4;
+    ctx.font = `bold ${s.r * 0.8}px "Comic Sans MS", system-ui, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.strokeText(s.label, 0, s.r * 0.05); ctx.fillText(s.label, 0, s.r * 0.05);
+  }
+  ctx.restore();
+}
+
+addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;   // leave browser shortcuts alone
+  e.preventDefault();
+  if (e.repeat && Math.random() < 0.6) return;     // calm down held keys a bit
+  hideHint();
+  const k = e.key.length === 1 ? e.key.toUpperCase() : '';
+  const code = (e.key.codePointAt(0) || 0) + e.key.length;
+  const shape = SHAPES[(code + Math.floor(Math.random() * 3)) % SHAPES.length];
+  const s = {
+    shape,
+    x: 60 + Math.random() * (W - 120),
+    y: 90 + Math.random() * (H - 150),
+    r: 35 + Math.random() * 60,
+    rot: shape === 'smiley' || shape === 'heart' ? (Math.random() - 0.5) * 0.5 : Math.random() * Math.PI * 2,
+    color: `hsl(${Math.floor(Math.random() * 360)},85%,58%)`,
+    label: /[A-Z0-9]/.test(k) ? k : '',
+    t: 0,
+  };
+  anims.push(s);
+  const notes = [262, 294, 330, 349, 392, 440, 494, 523, 587, 659];
+  boop(notes[code % notes.length], ['sine', 'triangle', 'square'][code % 3], 0.3);
+});
+
+// ---------- scroll wheel: sparkly little shapes at the mouse ----------
+let mouse = { x: innerWidth / 2, y: innerHeight / 2 }, lastWheel = 0, wheelHue = 0, wheelNote = 0;
+addEventListener('pointermove', e => { mouse = { x: e.clientX, y: e.clientY }; });
+addEventListener('wheel', e => {
+  if (e.ctrlKey) return;               // let ctrl+wheel zoom
+  e.preventDefault();
+  const now = performance.now();
+  if (now - lastWheel < 40) return;     // throttle fast spins
+  lastWheel = now;
+  hideHint();
+  const up = e.deltaY < 0;
+  wheelHue = (wheelHue + (up ? 25 : -25) + 360) % 360;
+  for (let i = 0; i < 3; i++) {
+    const shape = ['star', 'heart', 'circle', 'flower'][Math.floor(Math.random() * 4)];
+    anims.push({
+      shape,
+      x: mouse.x + (Math.random() - 0.5) * 70,
+      y: mouse.y + (Math.random() - 0.5) * 70,
+      r: 8 + Math.random() * 16,
+      rot: shape === 'heart' ? 0 : Math.random() * Math.PI * 2,
+      color: `hsl(${(wheelHue + i * 20) % 360},90%,60%)`,
+      label: '',
+      t: 0,
+    });
+  }
+  // scrolling up climbs the scale, scrolling down goes down
+  const notes = [262, 294, 330, 392, 440, 523, 587, 659, 784, 880];
+  wheelNote = Math.min(notes.length - 1, Math.max(0, wheelNote + (up ? 1 : -1)));
+  boop(notes[wheelNote], 'triangle', 0.12);
+}, { passive: false });
+
+// bouncy pop-in, then stamp onto the painting
+function tick() {
+  fctx.clearRect(0, 0, W, H);
+  for (let i = anims.length - 1; i >= 0; i--) {
+    const s = anims[i];
+    s.t += 1 / 18;
+    if (s.t >= 1) { drawShape(pctx, s, 1); anims.splice(i, 1); continue; }
+    const scale = 1 + Math.sin(s.t * Math.PI) * 0.35 * (1 - s.t) - (1 - s.t) ** 3; // overshoot bounce
+    drawShape(fctx, s, Math.max(0.01, scale));
+  }
+  requestAnimationFrame(tick);
+}
+tick();
+
+let hintHidden = false;
+function hideHint() {
+  if (hintHidden) return;
+  hintHidden = true;
+  setTimeout(() => document.getElementById('hint').style.opacity = 0, 1500);
+}
+</script>
+</body>
+</html>
